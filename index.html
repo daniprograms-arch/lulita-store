@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lulita Store</title>
+  <!-- Manifest para PWA -->
+  <link rel="manifest" href="manifest.json">
+  <!-- Bootstrap + Font Awesome -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <!-- html2canvas para capturas -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+  <style>
+    body { background-color: #f0f2f5; padding: 20px; font-family: 'Segoe UI', sans-serif; }
+    .cliente-card { border-radius: 12px; border: none; box-shadow: 0 4px 8px rgba(0,0,0,0.1); margin-bottom: 20px; transition: transform 0.1s; }
+    .cliente-card:hover { transform: scale(1.01); }
+    .cliente-header { border-radius: 12px 12px 0 0; padding: 12px 18px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; color: white; font-weight: bold; }
+    .cliente-body { padding: 15px; background: white; border-radius: 0 0 12px 12px; }
+    .color-badge { width: 20px; height: 20px; border-radius: 50%; display: inline-block; margin-right: 8px; }
+    .tasa-box { background: #fff; border-radius: 12px; padding: 15px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); margin-bottom: 20px; }
+    .btn-flotante { position: fixed; bottom: 30px; right: 30px; z-index: 1000; border-radius: 50%; width: 60px; height: 60px; font-size: 1.5rem; box-shadow: 0 6px 16px rgba(0,0,0,0.2); }
+    .form-interno { background: #f8f9fa; border-radius: 12px; padding: 12px; margin-bottom: 15px; }
+    .form-interno input, .form-interno select { margin-bottom: 6px; }
+    .btn-xs { padding: 2px 6px; font-size: 0.8rem; }
+    .resumen-panel { background: white; border-radius: 12px; padding: 20px; margin-top: 20px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
+    .resumen-titulo { font-weight: bold; margin-bottom: 15px; }
+    .captura-btn { margin-bottom: 10px; }
+    .captura-header { background-color: #f8f9fa; border-bottom: 2px solid #dee2e6; padding: 12px; margin-bottom: 15px; text-align: center; border-radius: 8px; }
+    .captura-header .nombre-cliente { font-size: 1.2rem; font-weight: bold; color: #333; }
+    .captura-header .fecha-captura { font-size: 0.9rem; color: #666; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h2 class="text-center mb-4">📒 Lulita Store</h2>
+
+    <div class="row justify-content-center mb-4">
+      <div class="col-md-4 tasa-box text-center">
+        <label class="fw-bold mb-2">💰 Tasa BCV (manual):</label>
+        <input type="number" id="tasaBCV" class="form-control text-center" placeholder="Ej: 36.50" step="any" onchange="guardarTasaLocal()">
+      </div>
+      <div class="col-md-4 tasa-box text-center">
+        <label class="fw-bold mb-2">📅 Mes de compra:</label>
+        <div class="input-group">
+          <select id="mesSelector" class="form-select text-center" onchange="cambiarMes()">
+            <option value="">Cargando...</option>
+          </select>
+          <button class="btn btn-outline-secondary" type="button" onclick="nuevoMes()" title="Agregar nuevo mes">➕</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="clientesContainer" class="row">
+      <div class="col-12 text-center text-muted"><p>No hay clientes registrados aún. ¡Agrega el primero!</p></div>
+    </div>
+
+    <div id="resumenContainer" class="row">
+      <div class="col-12">
+        <div class="resumen-panel">
+          <div class="resumen-titulo">📊 Resumen General</div>
+          <div id="resumenContenido">Cargando resumen...</div>
+        </div>
+      </div>
+    </div>
+
+    <button class="btn btn-primary btn-flotante" onclick="agregarClienteInterfaz()" title="Agregar cliente">
+      <i class="fas fa-user-plus"></i>
+    </button>
+  </div>
+
+  <!-- Service Worker -->
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('service-worker.js').catch(function(err) {
+        console.log('Service Worker no registrado:', err);
+      });
+    }
+  </script>
+
+  <!-- Scripts de la aplicación -->
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+  
+  <script>
+    // ⚠️ Pega aquí la URL de tu web app de Apps Script
+    const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycby.../exec'; // <-- REEMPLAZAR
+
+    // ************** COMUNICACIÓN CON BACKEND **************
+    function callBackend(action, args = []) {
+      return fetch(APPS_SCRIPT_URL, {
+        method: 'POST',
+        body: JSON.stringify({ action, args })
+      }).then(response => response.json());
+    }
+
+    // ************** INICIALIZACIÓN **************
+    let mesActual = '';
+    window.mesesDisponibles = [];
+    let timeoutBusquedaProducto = {};
+
+    const tasaGuardada = localStorage.getItem('tasaBCV_RegistroCompras');
+    if (tasaGuardada) document.getElementById('tasaBCV').value = tasaGuardada;
+
+    window.addEventListener('DOMContentLoaded', function() {
+      callBackend('listarMesesDisponibles')
+        .then(poblarSelectorMeses)
+        .catch(function(error) {
+          alert('Error al cargar meses: ' + error.message);
+          document.getElementById('mesSelector').innerHTML = '<option>Error</option>';
+        });
+      
+      callBackend('sincronizarCatalogoCompleto')
+        .then(function(msg) { console.log('Catálogo sincronizado'); })
+        .catch(function(error) { console.log('Error catálogo:', error.message); });
+    });
+
+    // ************** MESES **************
+    function poblarSelectorMeses(meses) {
+      window.mesesDisponibles = meses;
+      const select = document.getElementById('mesSelector');
+      select.innerHTML = '';
+      if (!meses || meses.length === 0) {
+        callBackend('obtenerNombreMesActual')
+          .then(function(mesActualGenerado) { llenarSelect([mesActualGenerado], mesActualGenerado); })
+          .catch(function(error) { alert('Error al crear mes: ' + error.message); });
+      } else { llenarSelect(meses, meses[0]); }
+    }
+
+    function llenarSelect(meses, mesSeleccionado) {
+      const select = document.getElementById('mesSelector');
+      meses.forEach(mes => {
+        const option = document.createElement('option');
+        option.value = mes;
+        option.textContent = mes.replace('_', ' ');
+        select.appendChild(option);
+      });
+      if (mesSeleccionado && meses.includes(mesSeleccionado)) {
+        select.value = mesSeleccionado;
+        mesActual = mesSeleccionado;
+      } else if (meses.length > 0) {
+        select.value = meses[0];
+        mesActual = meses[0];
+      }
+      cargarClientes();
+    }
+
+    function cambiarMes() { mesActual = document.getElementById('mesSelector').value; cargarClientes(); }
+
+    function nuevoMes() {
+      let sugerencia = '';
+      try {
+        const meses = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+        const ahora = new Date();
+        const mesSiguiente = new Date(ahora.getFullYear(), ahora.getMonth() + 1, 1);
+        sugerencia = meses[mesSiguiente.getMonth()] + '_' + mesSiguiente.getFullYear();
+      } catch(e) { sugerencia = 'Mayo_2026'; }
+      
+      const nombreMes = prompt("Crear nuevo mes de compra.\nFormato: Mes_Año (ej: Mayo_2026)", sugerencia);
+      if (!nombreMes) return;
+      if (!/^[A-Z][a-z]+_\d{4}$/.test(nombreMes)) { alert("❌ Formato incorrecto. Debe ser como: Mayo_2026"); return; }
+      
+      callBackend('crearMesSiNoExiste', [nombreMes])
+        .then(function(msg) {
+          callBackend('listarMesesDisponibles')
+            .then(function(meses) { poblarSelectorMeses(meses); });
+        });
+    }
+
+    // ************** CLIENTES **************
+    function cargarClientes() {
+      const container = document.getElementById('clientesContainer');
+      if (!mesActual) { container.innerHTML = '<div class="col-12 text-center text-muted">Selecciona un mes.</div>'; return; }
+      callBackend('listarClientes')
+        .then(mostrarClientes)
+        .catch(function(error) { container.innerHTML = '<div class="col-12 text-center text-danger">Error al cargar clientes.</div>'; });
+      cargarResumenGeneral();
+    }
+
+    function mostrarClientes(clientes) {
+      const container = document.getElementById('clientesContainer');
+      if (!clientes || clientes.length === 0) {
+        container.innerHTML = '<div class="col-12 text-center text-muted"><p>No hay clientes registrados aún.</p></div>';
+        return;
+      }
+      window.clientesActuales = clientes;
+      let html = '';
+      clientes.forEach(function(clienteArr) {
+        const nombre = clienteArr[0], color = clienteArr[1];
+        const idSeguro = nombre.replace(/\s/g, '_');
+        let opcionesMes = '';
+        if (window.mesesDisponibles && window.mesesDisponibles.length > 0) {
+          window.mesesDisponibles.forEach(function(m) {
+            const sel = (m === mesActual) ? ' selected' : '';
+            opcionesMes += `<option value="${m}"${sel}>${m.replace('_', ' ')}</option>`;
+          });
+        } else {
+          opcionesMes = `<option value="${mesActual}">${mesActual.replace('_', ' ')}</option>`;
+        }
+        html += `
+          <div class="col-12 col-md-6 col-lg-4">
+            <div class="card cliente-card" style="border-top: 5px solid ${color};">
+              <div class="cliente-header" style="background-color: ${color};" data-bs-toggle="collapse" data-bs-target="#cliente_${idSeguro}" aria-expanded="false">
+                <span><span class="color-badge" style="background:white;"></span> ${nombre}</span>
+                <i class="fas fa-chevron-down"></i>
+              </div>
+              <div id="cliente_${idSeguro}" class="collapse cliente-body">
+                <button class="btn btn-sm btn-outline-dark captura-btn w-100 no-captura" onclick="capturarCliente('${idSeguro}', '${nombre}')"><i class="fas fa-camera"></i> Capturar pantalla</button>
+                <div class="form-interno no-captura">
+                  <div class="row g-1">
+                    <div class="col-12"><input type="text" id="prod_${idSeguro}" class="form-control form-control-sm prod-input" placeholder="Producto" list="sugerencias_${idSeguro}" autocomplete="off"><datalist id="sugerencias_${idSeguro}"></datalist></div>
+                    <div class="col-4"><input type="number" id="cant_${idSeguro}" class="form-control form-control-sm cant-interna" placeholder="Cant" value="1" step="any"></div>
+                    <div class="col-4"><input type="number" id="usd_${idSeguro}" class="form-control form-control-sm usd-interna" placeholder="Precio $" step="any"></div>
+                    <div class="col-4"><input type="text" id="bs_${idSeguro}" class="form-control form-control-sm bs-interna" placeholder="Bs" readonly></div>
+                    <div class="col-6"><select id="tipo_${idSeguro}" class="form-select form-select-sm" onchange="toggleCantidad(this, '${idSeguro}')"><option value="Compra">Compra</option><option value="Abono">Abono</option></select></div>
+                    <div class="col-6"><select id="mesinterno_${idSeguro}" class="form-select form-select-sm">${opcionesMes}</select></div>
+                    <div class="col-12"><button class="btn btn-sm btn-success w-100" onclick="guardarDesdeTarjeta('${nombre}')">➕ Guardar</button></div>
+                  </div>
+                </div>
+                <div id="saldo_${idSeguro}" class="mb-2 p-2 bg-light rounded" style="display:none;"><strong>Deuda pendiente:</strong> <span id="saldoTexto_${idSeguro}">Calculando...</span></div>
+                <div id="contenido_${idSeguro}"><p class="text-muted text-center">Cargando registros...</p></div>
+              </div>
+            </div>
+          </div>`;
+      });
+      container.innerHTML = html;
+      document.querySelectorAll('.cant-interna, .usd-interna').forEach(function(input) { input.addEventListener('input', calcularBs); });
+      document.querySelectorAll('.prod-input').forEach(function(input) {
+        input.addEventListener('input', function(e) {
+          const texto = e.target.value;
+          const idSeguro = input.id.split('_').slice(1).join('_');
+          autocompletarProducto(texto, idSeguro);
+        });
+      });
+    }
+
+    // ************** AUTOCOMPLETADO **************
+    function autocompletarProducto(texto, idSeguro) {
+      if (timeoutBusquedaProducto[idSeguro]) clearTimeout(timeoutBusquedaProducto[idSeguro]);
+      if (!texto || texto.trim().length === 0) { document.getElementById('sugerencias_' + idSeguro).innerHTML = ''; return; }
+      timeoutBusquedaProducto[idSeguro] = setTimeout(function() {
+        callBackend('buscarProductos', [texto])
+          .then(function(sugerencias) {
+            const datalist = document.getElementById('sugerencias_' + idSeguro);
+            if (!datalist) return;
+            datalist.innerHTML = '';
+            if (sugerencias && sugerencias.length > 0) {
+              sugerencias.forEach(function(p) { const opt = document.createElement('option'); opt.value = p; datalist.appendChild(opt); });
+            }
+          });
+      }, 300);
+    }
+
+    // ************** CAPTURA **************
+    function capturarCliente(idSeguro, nombreCliente) {
+      const target = document.getElementById('cliente_' + idSeguro);
+      if (!target) { alert('No se encontró la tarjeta del cliente.'); return; }
+      const ocultos = target.querySelectorAll('.no-captura');
+      const displaysOriginales = [];
+      ocultos.forEach(function(el) { displaysOriginales.push(el.style.display); el.style.display = 'none'; });
+      const ahora = new Date();
+      const dia = String(ahora.getDate()).padStart(2, '0');
+      const mes = String(ahora.getMonth() + 1).padStart(2, '0');
+      const header = document.createElement('div');
+      header.className = 'captura-header';
+      header.innerHTML = `<div class="nombre-cliente">🧾 ${nombreCliente}</div><div class="fecha-captura">${dia}/${mes}</div>`;
+      target.insertBefore(header, target.firstChild);
+      const aviso = document.createElement('div');
+      aviso.textContent = 'Generando captura...';
+      aviso.style.position = 'fixed'; aviso.style.bottom = '20px'; aviso.style.left = '50%';
+      aviso.style.transform = 'translateX(-50%)'; aviso.style.backgroundColor = '#333';
+      aviso.style.color = 'white'; aviso.style.padding = '10px 20px'; aviso.style.borderRadius = '10px'; aviso.style.zIndex = '9999';
+      document.body.appendChild(aviso);
+      html2canvas(target, { scale: 2, backgroundColor: '#ffffff', logging: false })
+        .then(function(canvas) {
+          document.body.removeChild(aviso);
+          if (header.parentNode) header.parentNode.removeChild(header);
+          ocultos.forEach(function(el, idx) { el.style.display = displaysOriginales[idx]; });
+          canvas.toBlob(function(blob) {
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url; a.download = 'Cliente_' + idSeguro + '.png';
+            a.click(); URL.revokeObjectURL(url);
+          });
+        })
+        .catch(function(error) {
+          document.body.removeChild(aviso);
+          if (header.parentNode) header.parentNode.removeChild(header);
+          ocultos.forEach(function(el, idx) { el.style.display = displaysOriginales[idx]; });
+          alert('Error al generar captura: ' + error.message);
+        });
+    }
+
+    // ************** RESUMEN GENERAL **************
+    function cargarResumenGeneral() {
+      const contenedor = document.getElementById('resumenContenido');
+      if (!contenedor) return;
+      contenedor.innerHTML = 'Cargando resumen...';
+      callBackend('obtenerResumenGeneral')
+        .then(function(resumen) {
+          let html = '';
+          if (!resumen || !resumen.clientes || resumen.clientes.length === 0) {
+            html = '<p class="text-muted">No hay clientes para mostrar resumen.</p>';
+          } else {
+            html += '<p><strong>Deuda total de todos los clientes:</strong> ' + resumen.totalDeudaUSD.toFixed(2) + ' $ | ' + resumen.totalDeudaBS.toFixed(2) + ' Bs</p>';
+            if (resumen.mayorDeudor && resumen.mayorDeudor.deudaBS > 0) {
+              html += '<p><strong>Mayor deudor:</strong> <span style="color:' + resumen.mayorDeudor.color + ';">' + resumen.mayorDeudor.nombre + '</span> - ' + resumen.mayorDeudor.deudaUSD.toFixed(2) + ' $ | ' + resumen.mayorDeudor.deudaBS.toFixed(2) + ' Bs</p>';
+            } else { html += '<p><strong>Mayor deudor:</strong> Ninguno</p>'; }
+            var alDia = resumen.clientes.filter(function(c) { return c.saldoBS <= 0; });
+            if (alDia.length > 0) {
+              html += '<p><strong>Clientes al día:</strong> ' + alDia.map(function(c) { return '<span style="color:' + c.color + ';">' + c.nombre + '</span>'; }).join(', ') + '</p>';
+            } else { html += '<p><strong>Clientes al día:</strong> Ninguno</p>'; }
+          }
+          contenedor.innerHTML = html;
+        })
+        .catch(function(error) {
+          contenedor.innerHTML = '<p class="text-danger">Error al cargar resumen.</p>';
+        });
+    }
+
+    function calcularBs(evento) {
+      const input = evento.target;
+      const partes = input.id.split('_');
+      const idSeguro = partes.slice(1).join('_');
+      const usd = document.getElementById('usd_' + idSeguro);
+      const bs = document.getElementById('bs_' + idSeguro);
+      const tasa = parseFloat(document.getElementById('tasaBCV').value) || 0;
+      const precioUSD = parseFloat(usd.value) || 0;
+      if (tasa > 0 && precioUSD >= 0) { bs.value = (precioUSD * tasa).toFixed(2) + " Bs"; }
+      else { bs.value = ''; }
+    }
+
+    function toggleCantidad(select, idSeguro) {
+      const cant = document.getElementById('cant_' + idSeguro);
+      if (!cant) return;
+      if (select.value === 'Abono') { cant.style.display = 'none'; cant.value = 1; }
+      else { cant.style.display = ''; }
+    }
+
+    document.addEventListener('DOMContentLoaded', function() {
+      const container = document.getElementById('clientesContainer');
+      container.addEventListener('show.bs.collapse', function(evento) {
+        const divColapso = evento.target;
+        const idCliente = divColapso.id.replace('cliente_', '');
+        const nombreCliente = idCliente.replace(/_/g, ' ');
+        cargarRegistrosEnTarjeta(nombreCliente, divColapso);
+      });
+    });
+
+    function cargarRegistrosEnTarjeta(nombreCliente, divColapso) {
+      if (!mesActual) return;
+      const idSeguro = nombreCliente.replace(/\s/g, '_');
+      const contReg = divColapso.querySelector('[id^="contenido_"]');
+      const contSaldo = document.getElementById('saldo_' + idSeguro);
+      const textoSaldo = document.getElementById('saldoTexto_' + idSeguro);
+      if (!contReg) return;
+      contReg.innerHTML = '<p class="text-muted text-center">Cargando registros...</p>';
+      if (contSaldo) contSaldo.style.display = 'none';
+      callBackend('obtenerRegistrosCliente', [mesActual, nombreCliente])
+        .then(function(registros) { mostrarTablaRegistros(nombreCliente, registros, contReg); });
+      callBackend('obtenerSaldoCliente', [nombreCliente])
+        .then(function(saldo) {
+          if (textoSaldo && contSaldo) {
+            if (saldo && saldo.saldoBS !== undefined) {
+              const colorSaldo = saldo.saldoBS > 0 ? 'text-danger' : 'text-success';
+              textoSaldo.innerHTML = `
+                <span class="${colorSaldo} fw-bold">${saldo.saldoUSD.toFixed(2)} $</span>
+                <span class="no-captura ${colorSaldo} fw-bold"> | ${saldo.saldoBS.toFixed(2)} Bs</span><br>
+                <small class="text-muted no-captura">
+                  Compras: ${saldo.totalComprasUSD.toFixed(2)} $ <span class="no-captura">/ ${saldo.totalComprasBS.toFixed(2)} Bs</span><br>
+                  Abonos: ${saldo.totalAbonosUSD.toFixed(2)} $ <span class="no-captura">/ ${saldo.totalAbonosBS.toFixed(2)} Bs</span>
+                </small>`;
+            } else { textoSaldo.innerHTML = '<span class="text-muted">Sin datos históricos.</span>'; }
+            contSaldo.style.display = 'block';
+          }
+        });
+    }
+
+    function mostrarTablaRegistros(nombreCliente, registros, contenedor) {
+      if (!registros || registros.length === 0) { contenedor.innerHTML = '<p class="text-muted text-center">Sin registros este mes.</p>'; return; }
+      let html = `<div class="table-responsive"><table class="table table-sm table-hover"><thead class="table-light"><tr><th class="no-captura">Fecha</th><th>Producto</th><th>Cant</th><th class="no-captura">$</th><th class="no-captura">Bs.</th><th class="no-captura">Tipo</th><th></th></tr></thead><tbody>`;
+      registros.forEach(function(fila) {
+        let fecha = '';
+        if (fila[0]) { const fechaStr = fila[0].toString().trim(); if (fechaStr.includes('/')) { const partes = fechaStr.split('/'); if (partes.length >= 2) fecha = partes[0].padStart(2,'0') + '/' + partes[1].padStart(2,'0'); } else fecha = fechaStr; }
+        const producto = fila[2], cantidad = fila[3], precioUSD = fila[4], precioBS = fila[6], tipo = fila[7], numeroFila = fila[8];
+        const claseFila = tipo === 'Abono' ? 'table-success' : '';
+        html += `<tr class="${claseFila}"><td class="small no-captura">${fecha}</td><td>${producto}</td><td class="text-center">${cantidad}</td><td class="no-captura">${precioUSD}</td><td class="no-captura">${precioBS}</td><td class="no-captura"><span class="badge ${tipo==='Abono'?'bg-success':'bg-primary'}">${tipo}</span></td><td class="text-end"><button class="btn btn-sm btn-outline-secondary btn-xs no-captura" onclick="editarFila('${nombreCliente}', ${numeroFila})" title="Editar"><i class="fas fa-edit"></i></button> <button class="btn btn-sm btn-outline-danger btn-xs no-captura" onclick="eliminarFila('${nombreCliente}', ${numeroFila})" title="Eliminar"><i class="fas fa-trash"></i></button></td></tr>`;
+      });
+      html += '</tbody></table></div>';
+      contenedor.innerHTML = html;
+    }
+
+    function guardarDesdeTarjeta(nombreCliente) {
+      const idSeguro = nombreCliente.replace(/\s/g, '_');
+      const prod = document.getElementById('prod_' + idSeguro), cant = document.getElementById('cant_' + idSeguro);
+      const usd = document.getElementById('usd_' + idSeguro), bs = document.getElementById('bs_' + idSeguro);
+      const tipo = document.getElementById('tipo_' + idSeguro), mesInt = document.getElementById('mesinterno_' + idSeguro);
+      const tasa = parseFloat(document.getElementById('tasaBCV').value) || 0;
+      if (tasa <= 0) { alert("❌ Ingresa la tasa BCV primero."); return; }
+      const producto = tipo.value === 'Abono' ? 'Abono' : prod.value.trim();
+      if (!producto) { alert("❌ Ingresa el nombre del producto."); return; }
+      let cantidad = parseFloat(cant.value);
+      if (tipo.value !== 'Abono') { if (isNaN(cantidad) || cantidad <= 0) { alert("❌ Cantidad inválida."); return; } }
+      else cantidad = 1;
+      const precioUSD = parseFloat(usd.value);
+      if (isNaN(precioUSD) || precioUSD < 0) { alert("❌ Precio USD inválido."); return; }
+      const precioBS = (precioUSD * tasa).toFixed(2);
+      const mesElegido = mesInt ? mesInt.value : mesActual;
+      const registro = { cliente: nombreCliente, producto, cantidad, precioUSD, tasa, precioBS: parseFloat(precioBS), tipo: tipo.value };
+      callBackend('registrarCompra', [mesElegido, registro])
+        .then(function(msg) {
+          alert(msg);
+          if (tipo.value !== 'Abono' && producto !== 'Abono') callBackend('agregarProductoACatalogo', [producto]);
+          prod.value = ''; cant.value = '1'; usd.value = ''; bs.value = '';
+          const cantElem = document.getElementById('cant_' + idSeguro); if (cantElem) cantElem.style.display = '';
+          const divColapso = document.getElementById('cliente_' + idSeguro);
+          cargarRegistrosEnTarjeta(nombreCliente, divColapso);
+          cargarResumenGeneral();
+        })
+        .catch(function(error) { alert('Error al guardar: ' + error.message); });
+    }
+
+    function editarFila(nombreCliente, numeroFila) {
+      if (!mesActual) return;
+      let nuevoProducto = prompt("✏️ Modificar Producto:", ""); if (nuevoProducto === null) return;
+      nuevoProducto = nuevoProducto.trim(); if (nuevoProducto === "") { alert("❌ Producto no puede estar vacío"); return; }
+      let nuevaCant;
+      while (true) { let entrada = prompt("✏️ Modificar Cantidad:", "1"); if (entrada === null) return; let num = parseFloat(entrada.replace(",",".")); if (!isNaN(num) && num > 0) { nuevaCant = num; break; } else alert("❌ Cantidad inválida."); }
+      let nuevoPrecioUSD;
+      while (true) { let entrada = prompt("✏️ Modificar Precio Unitario ($):", "0"); if (entrada === null) return; let num = parseFloat(entrada.replace(",",".")); if (!isNaN(num) && num >= 0) { nuevoPrecioUSD = num; break; } else alert("❌ Precio inválido."); }
+      const tasa = parseFloat(document.getElementById('tasaBCV').value) || 0; if (tasa <= 0) { alert("❌ Ingresa tasa BCV"); return; }
+      const nuevoBs = (nuevoPrecioUSD * tasa).toFixed(2);
+      callBackend('editarRegistro', [mesActual, numeroFila, nuevoProducto, nuevaCant, nuevoPrecioUSD, tasa, parseFloat(nuevoBs)])
+        .then(function(msg) {
+          alert(msg);
+          if (nuevoProducto !== 'Abono') callBackend('agregarProductoACatalogo', [nuevoProducto]);
+          const idSeguro = nombreCliente.replace(/\s/g, '_');
+          const divColapso = document.getElementById('cliente_' + idSeguro);
+          cargarRegistrosEnTarjeta(nombreCliente, divColapso); cargarResumenGeneral();
+        })
+        .catch(function(error) { alert('Error al editar: ' + error.message); });
+    }
+
+    function eliminarFila(nombreCliente, numeroFila) {
+      if (!mesActual) return;
+      if (!confirm("¿Estás seguro de eliminar este registro?")) return;
+      callBackend('eliminarRegistro', [mesActual, numeroFila])
+        .then(function(msg) {
+          alert(msg); const idSeguro = nombreCliente.replace(/\s/g, '_');
+          const divColapso = document.getElementById('cliente_' + idSeguro);
+          cargarRegistrosEnTarjeta(nombreCliente, divColapso); cargarResumenGeneral();
+        })
+        .catch(function(error) { alert('Error al eliminar: ' + error.message); });
+    }
+
+    function agregarClienteInterfaz() {
+      const nombre = prompt("Nombre del nuevo cliente:"); if (!nombre) return;
+      callBackend('agregarCliente', [nombre])
+        .then(function(msg) { alert(msg); cargarClientes(); })
+        .catch(function(error) { alert('Error al agregar cliente: ' + error.message); });
+    }
+
+    function guardarTasaLocal() { const tasa = document.getElementById('tasaBCV').value; localStorage.setItem('tasaBCV_RegistroCompras', tasa); }
+  </script>
+</body>
+</html>
