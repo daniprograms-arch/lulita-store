@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><title>Test Backend</title></head>
+<body>
+  <h1>Probando conexión con Apps Script</h1>
+  <pre id="resultado">Esperando...</pre>
+  <script>
+    const URL = 'https://script.google.com/macros/s/AKfycbzbXdVfd1sphNzADCJpxNvelBsHNlluTQpARkEWoYb9FFFdlwAVxQIlA5T5tEmbV7fw0Q/exec';
+    fetch(URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'listarMesesDisponibles', args: [] })
+    })
+    .then(r => r.json())
+    .then(data => { document.getElementById('resultado').textContent = JSON.stringify(data, null, 2); })
+    .catch(err => { document.getElementById('resultado').textContent = 'Error: ' + err.message; });
+  </script>
+</body>
+</html>
